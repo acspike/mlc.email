@@ -1,0 +1,4 @@
+html2text==2015.6.21
+py2exe==0.6.9
+pystache==0.5.4
+pywin32==219

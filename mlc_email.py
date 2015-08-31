@@ -27,10 +27,14 @@ import winerror
 
 import smtplib
 import os
+import html2text
+import pystache
 
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
+from email.header import Header
+from email.utils import formataddr
 
 from email.utils import COMMASPACE, formatdate
 from email import encoders
@@ -43,7 +47,7 @@ class Email(object):
     _reg_progid_ = 'MLC.Email'
     _reg_verprogid_ = 'MLC.Email.1'
     _reg_clsid_ = '{88A05252-816B-4214-AC83-05190632D498}'
-    _public_methods_ = ['setFrom','setSubject','addTo','addCc','addBcc','setHeader','addText','addFile','setServer','send']
+    _public_methods_ = ['setFrom','setSubject','addTo','addCc','addBcc','setHeader','addText','addHTMLBody','addFile','setServer','send','setData','getData','clearData']
     _public_attrs_ = []
     _readonly_attrs_ = []
     def __init__(self):
@@ -54,10 +58,18 @@ class Email(object):
         self.Bcc = set([])
         self.Headers = {}
         self.Body = []
-        self.Files = {}
+        self.htmlBody = ''
+        self.Files = []
         self.Server = 'localhost'
-    def setFrom(self, addr):
-        addr = str(addr)
+        self.data = {}
+    def setData(self, key, value):
+        self.data[key] = value
+    def getData(self, key):
+        return self.data[key]
+    def clearData(self):
+        self.data = {}
+    def setFrom(self, addr, name=""):
+        addr = formataddr((str(Header(name, 'utf-8')), addr))
         self.From = addr
     def setSubject(self, subj):
         self.Subject = str(subj)
@@ -74,12 +86,17 @@ class Email(object):
         self.Headers[str(name)] = str(val)
     def addText(self, text):
         self.Body.append(str(text))
+    def addHTMLBody(self, html):
+        self.htmlBody = html
     def addFile(self, filepath):
+        self.Files.append(filepath)
+    def _loadFile(self, filepath_template):
+        filepath = pystache.render(filepath_template, self.data)
         try:
             filepath = str(filepath)
             fname = os.path.basename(filepath)
             fdata = open(filepath, 'rb').read()
-            self.Files[fname] = fdata
+            return (fname, fdata)
         except:
             raise COMException('Unable to attach file: ' + str(filepath), winerror.E_FAIL)
     def setServer(self, server):
@@ -90,22 +107,34 @@ class Email(object):
             msg['From'] = self.From
             msg['To'] = COMMASPACE.join(list(self.To))
             msg['Date'] = formatdate(localtime=True)
-            msg['Subject'] = self.Subject
+            sub_filled = pystache.render(self.Subject, self.data)
+            msg['Subject'] = sub_filled
             if self.Cc:
                 msg['Cc'] = COMMASPACE.join(list(self.Cc))
             
             for h in self.Headers:
-                msg[h] = self.Headers[h]
+                h_filled = pystache.render(h, self.data)
+                header_filled = pystache.render(self.Headers[h], self.data)
+                msg[h_filled] = header_filled
             
+            if self.htmlBody:
+                inner = MIMEMultipart('alternative')
+                html_filled = pystache.render(self.htmlBody, self.data)
+                text = html2text.html2text(html_filled)
+                inner.attach(MIMEText(text, 'plain'))
+                inner.attach(MIMEText(html_filled, 'html'))
+                msg.attach(inner)
+
             msg.attach(MIMEText('\n'.join(self.Body)))
             
-            for f in self.Files.keys():
+            for f in self.Files:
+                fname, fdata = self._loadFile(f)
                 part = MIMEBase('application', 'octet-stream')
-                part.set_payload(self.Files[f])
+                part.set_payload(fdata)
                 encoders.encode_base64(part)
-                part.add_header('Content-Disposition', 'attachment; filename="%s"' % (f,))
+                part.add_header('Content-Disposition', 'attachment; filename="%s"' % (fname,))
                 msg.attach(part)
-            
+
         except:
             raise COMException('Unable to build message', winerror.E_FAIL)
         
